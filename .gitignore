@@ -9,6 +9,9 @@ envs/curobo
 viewer_show.*
 eval_video/
 task_config/
+!task_config/
+task_config/*
+!task_config/demo_clean_xarm6_g1.yml
 **/.DS_Store
 
 # eval result
@@ -18,6 +21,11 @@ eval_result/
 assets/*
 !assets/_download.py
 !assets/files
+!assets/embodiments/
+assets/embodiments/*
+!assets/embodiments/xarm6-g1/
+!assets/embodiments/xarm6-g1/**
+assets/embodiments/xarm6-g1/curobo.yml
 
 policy/weights/*
 

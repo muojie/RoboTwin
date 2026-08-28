@@ -1,0 +1,53 @@
+urdf_path: "./xarm6_g1.urdf"
+srdf_path: "./xarm6_g1.srdf"
+joint_stiffness: 1000
+joint_damping: 200
+gripper_stiffness: 1000
+gripper_damping: 200
+move_group: ["link6", "link6"]
+ee_joints: ["joint6", "joint6"]
+arm_joints_name:
+  - [joint1, joint2, joint3, joint4, joint5, joint6]
+  - [joint1, joint2, joint3, joint4, joint5, joint6]
+gripper_name:
+  - base: drive_joint
+    mimic:
+      - [left_finger_joint, 1.0, 0.0]
+      - [left_inner_knuckle_joint, 1.0, 0.0]
+      - [right_outer_knuckle_joint, 1.0, 0.0]
+      - [right_finger_joint, 1.0, 0.0]
+      - [right_inner_knuckle_joint, 1.0, 0.0]
+  - base: drive_joint
+    mimic:
+      - [left_finger_joint, 1.0, 0.0]
+      - [left_inner_knuckle_joint, 1.0, 0.0]
+      - [right_outer_knuckle_joint, 1.0, 0.0]
+      - [right_finger_joint, 1.0, 0.0]
+      - [right_inner_knuckle_joint, 1.0, 0.0]
+# UFACTORY link_tcp is 0.172 m at the fingertip edge. RoboTwin targets the
+# center of the contact pad, which is approximately 0.14 m from link6.
+gripper_bias: 0.14
+# RoboTwin normalized 0=closed, 1=open; UFACTORY G1 joint 0=open, 0.85=closed.
+gripper_scale: [0.85, 0.0]
+homestate:
+  - [0.0, -0.5, -1.5, 0.0, 2.0, 0.0]
+  - [0.0, -0.5, -1.5, 0.0, 2.0, 0.0]
+# The URDF zero pose extends below the mounting plane and intersects the table.
+initialize_qpos_to_homestate: true
+# Official visual meshes overlap at several fixed G1/arm interfaces. CuRobo
+# still checks self-collision; PhysX self-contact is disabled per articulation.
+disable_self_collisions: true
+delta_matrix: [[0, 0, -1], [0, 1, 0], [1, 0, 0]]
+global_trans_matrix: [[0, 0, 1], [0, 1, 0], [-1, 0, 0]]
+robot_pose:
+  - [0.0, -0.45, 0.75, 0.7071068, 0.0, 0.0, 0.7071068]
+  - [0.0, -0.45, 0.75, 0.7071068, 0.0, 0.0, 0.7071068]
+planner: curobo
+dual_arm: false
+rotate_lim: [0.2, 1.0]
+grasp_perfect_direction: [front_right, front_left]
+static_camera_list:
+  - name: head_camera
+    position: [-0.032, -0.45, 1.35]
+    forward: [0.0, 0.6, -0.8]
+    left: [-1.0, 0.0, 0.0]

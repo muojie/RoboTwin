@@ -54,6 +54,12 @@ class Robot:
         self.left_gripper_bias = left_embodiment_args["gripper_bias"]
         self.left_gripper_scale = left_embodiment_args["gripper_scale"]
         self.left_homestate = left_embodiment_args.get("homestate", [[0] * len(self.left_arm_joints_name)])[0]
+        self.left_initialize_qpos_to_homestate = left_embodiment_args.get(
+            "initialize_qpos_to_homestate", False
+        )
+        self.left_disable_self_collisions = left_embodiment_args.get(
+            "disable_self_collisions", False
+        )
         self.left_fix_gripper_name = left_embodiment_args.get("fix_gripper_name", [])
         self.left_delta_matrix = np.array(left_embodiment_args.get("delta_matrix", [[1, 0, 0], [0, 1, 0], [0, 0, 1]]))
         self.left_inv_delta_matrix = np.linalg.inv(self.left_delta_matrix)
@@ -81,6 +87,12 @@ class Robot:
         self.right_gripper_bias = right_embodiment_args["gripper_bias"]
         self.right_gripper_scale = right_embodiment_args["gripper_scale"]
         self.right_homestate = right_embodiment_args.get("homestate", [[1] * len(self.right_arm_joints_name)])[1]
+        self.right_initialize_qpos_to_homestate = right_embodiment_args.get(
+            "initialize_qpos_to_homestate", False
+        )
+        self.right_disable_self_collisions = right_embodiment_args.get(
+            "disable_self_collisions", False
+        )
         self.right_fix_gripper_name = right_embodiment_args.get("fix_gripper_name", [])
         self.right_delta_matrix = np.array(right_embodiment_args.get("delta_matrix", [[1, 0, 0], [0, 1, 0], [0, 0, 1]]))
         self.right_inv_delta_matrix = np.linalg.inv(self.right_delta_matrix)
@@ -117,6 +129,22 @@ class Robot:
             right_loader.fix_root_link = True
             self.left_entity = left_loader.load(self.left_urdf_path)
             self.right_entity = right_loader.load(self.right_urdf_path)
+
+        def disable_self_collisions(entity, ignore_bit):
+            for link in entity.get_links():
+                for shape in link.get_collision_shapes():
+                    groups = list(shape.get_collision_groups())
+                    groups[2] |= ignore_bit
+                    shape.set_collision_groups(groups)
+
+        if self.is_dual_arm:
+            if self.left_disable_self_collisions or self.right_disable_self_collisions:
+                disable_self_collisions(self.left_entity, 1 << 30)
+        else:
+            if self.left_disable_self_collisions:
+                disable_self_collisions(self.left_entity, 1 << 30)
+            if self.right_disable_self_collisions:
+                disable_self_collisions(self.right_entity, 1 << 29)
 
         self.left_entity.set_root_pose(self.left_entity_origion_pose)
         self.right_entity.set_root_pose(self.right_entity_origion_pose)
@@ -227,7 +255,33 @@ class Robot:
                 damping=self.right_gripper_damping,
             )
 
+        if self.left_initialize_qpos_to_homestate or self.right_initialize_qpos_to_homestate:
+            self.move_to_homestate()
+
     def move_to_homestate(self):
+        def initialize_qpos(entity, arm_joints, homestate, enabled):
+            if not enabled:
+                return
+            active_joints = entity.get_active_joints()
+            qpos = entity.get_qpos()
+            for joint, value in zip(arm_joints, homestate):
+                qpos[active_joints.index(joint)] = value
+            entity.set_qpos(qpos)
+            entity.set_qvel(np.zeros_like(entity.get_qvel()))
+
+        initialize_qpos(
+            self.left_entity,
+            self.left_arm_joints,
+            self.left_homestate,
+            self.left_initialize_qpos_to_homestate,
+        )
+        initialize_qpos(
+            self.right_entity,
+            self.right_arm_joints,
+            self.right_homestate,
+            self.right_initialize_qpos_to_homestate,
+        )
+
         for i, joint in enumerate(self.left_arm_joints):
             joint.set_drive_target(self.left_homestate[i])
 
