@@ -59,8 +59,6 @@ class lift_pot_single_arm(Base_Task):
 
         self.info["info"] = {
             "{A}": f"{self.model_name}/base{self.model_id}",
-            "{a}": str(self.arm_tag),
-            "{contact_point_id}": str(self.contact_point_id),
         }
         return self.info
 

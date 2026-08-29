@@ -1,0 +1,21 @@
+{
+  "full_description": "use one arm to lift the pot",
+  "schema": "{A} notifies the pot. Arm comes as literal here.",
+  "preference": "num of words should not exceed 8",
+  "seen": [
+    "Use one arm to hold {A}, then lift.",
+    "Grasp {A} with one arm and raise it.",
+    "Secure {A} and lift it upward.",
+    "Hold {A} firmly, then lift with one arm.",
+    "Pick up {A} using the active arm.",
+    "Grab {A} and raise it steadily.",
+    "Lift {A} with one arm.",
+    "Use the active arm to lift {A}"
+  ],
+  "unseen": [
+    "Raise {A} with one arm.",
+    "Use one arm to lift {A}.",
+    "Hold {A} and move it upward.",
+    "Pick {A} up with the active arm."
+  ]
+}
