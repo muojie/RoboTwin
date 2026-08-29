@@ -57,6 +57,11 @@ class Camera:
 
         self.collect_head_camera = kwags["camera"].get("collect_head_camera", True)
         self.collect_wrist_camera = kwags["camera"].get("collect_wrist_camera", True)
+        self.single_arm = bool(kwags.get("single_arm", False))
+        self.active_arm = str(kwags.get("active_arm", "left")).lower()
+        if self.active_arm not in ("left", "right"):
+            raise ValueError("active_arm must be 'left' or 'right'")
+        self.wrist_cameras = {}
 
         # embodiment = kwags.get('embodiment')
         # embodiment_config_path = os.path.join(CONFIGS_PATH, '_embodiment_config.yml')
@@ -132,23 +137,25 @@ class Camera:
         # ================================= wrist camera =================================
         if self.collect_wrist_camera:
             wrist_camera_config = camera_args[self.wrist_camera_type]
-            self.left_camera = scene.add_camera(
-                name="left_camera",
-                width=wrist_camera_config["w"],
-                height=wrist_camera_config["h"],
-                fovy=np.deg2rad(wrist_camera_config["fovy"]),
-                near=near,
-                far=far,
-            )
-
-            self.right_camera = scene.add_camera(
-                name="right_camera",
-                width=wrist_camera_config["w"],
-                height=wrist_camera_config["h"],
-                fovy=np.deg2rad(wrist_camera_config["fovy"]),
-                near=near,
-                far=far,
-            )
+            wrist_sides = (self.active_arm,) if self.single_arm else ("left", "right")
+            for side in wrist_sides:
+                camera = scene.add_camera(
+                    name=f"{side}_camera",
+                    width=wrist_camera_config["w"],
+                    height=wrist_camera_config["h"],
+                    fovy=np.deg2rad(wrist_camera_config["fovy"]),
+                    near=near,
+                    far=far,
+                )
+                self.wrist_cameras[side] = camera
+            # Keep the historical attributes for callers that use them
+            # directly; the inactive side is explicitly None in single-arm
+            # mode.
+            self.left_camera = self.wrist_cameras.get("left")
+            self.right_camera = self.wrist_cameras.get("right")
+        else:
+            self.left_camera = None
+            self.right_camera = None
 
         # ================================= sensor camera =================================
         # sensor_config = StereoDepthSensorConfig()
@@ -273,8 +280,8 @@ class Camera:
     def update_picture(self):
         # camera
         if self.collect_wrist_camera:
-            self.left_camera.take_picture()
-            self.right_camera.take_picture()
+            for camera in self.wrist_cameras.values():
+                camera.take_picture()
 
         for camera in self.static_camera_list:
             camera.take_picture()
@@ -283,14 +290,17 @@ class Camera:
         # self.head_sensor.take_picture()
         # self.head_sensor.compute_depth()
 
-    def update_wrist_camera(self, left_pose, right_pose):
+    def update_wrist_camera(self, left_pose=None, right_pose=None):
         """
         Update rendering to refresh the camera's RGBD information
         (rendering must be updated even when disabled, otherwise data cannot be collected).
         """
         if self.collect_wrist_camera:
-            self.left_camera.entity.set_pose(left_pose)
-            self.right_camera.entity.set_pose(right_pose)
+            poses = {"left": left_pose, "right": right_pose}
+            for side, camera in self.wrist_cameras.items():
+                pose = poses[side]
+                if pose is not None:
+                    camera.entity.set_pose(pose)
 
     def get_config(self) -> dict:
         res = {}
@@ -306,8 +316,8 @@ class Camera:
             }
 
         if self.collect_wrist_camera:
-            res["left_camera"] = _get_config(self.left_camera)
-            res["right_camera"] = _get_config(self.right_camera)
+            for side, camera in self.wrist_cameras.items():
+                res[f"{side}_camera"] = _get_config(camera)
 
         for camera, camera_name in zip(self.static_camera_list, self.static_camera_name):
             if camera_name == "head_camera":
@@ -345,10 +355,8 @@ class Camera:
         res = {}
 
         if self.collect_wrist_camera:
-            res["left_camera"] = {}
-            res["right_camera"] = {}
-            res["left_camera"]["rgba"] = _get_rgba(self.left_camera)
-            res["right_camera"]["rgba"] = _get_rgba(self.right_camera)
+            for side, camera in self.wrist_cameras.items():
+                res[f"{side}_camera"] = {"rgba": _get_rgba(camera)}
 
         for camera, camera_name in zip(self.static_camera_list, self.static_camera_name):
             if camera_name == "head_camera":
@@ -393,10 +401,10 @@ class Camera:
         }
 
         if self.collect_wrist_camera:
-            res["left_camera"] = {}
-            res["right_camera"] = {}
-            res["left_camera"][f"{level}_segmentation"] = _get_segmentation(self.left_camera, level=level)
-            res["right_camera"][f"{level}_segmentation"] = _get_segmentation(self.right_camera, level=level)
+            for side, camera in self.wrist_cameras.items():
+                res[f"{side}_camera"] = {
+                    f"{level}_segmentation": _get_segmentation(camera, level=level)
+                }
 
         for camera, camera_name in zip(self.static_camera_list, self.static_camera_name):
             if camera_name == "head_camera":
@@ -426,12 +434,10 @@ class Camera:
         rgba = self.get_rgba()
 
         if self.collect_wrist_camera:
-            res["left_camera"] = {}
-            res["right_camera"] = {}
-            res["left_camera"]["depth"] = _get_depth(self.left_camera)
-            res["right_camera"]["depth"] = _get_depth(self.right_camera)
-            res["left_camera"]["depth"] *= rgba["left_camera"]["rgba"][:, :, 3] / 255
-            res["right_camera"]["depth"] *= rgba["right_camera"]["rgba"][:, :, 3] / 255
+            for side, camera in self.wrist_cameras.items():
+                key = f"{side}_camera"
+                res[key] = {"depth": _get_depth(camera)}
+                res[key]["depth"] *= rgba[key]["rgba"][:, :, 3] / 255
         
         for camera, camera_name in zip(self.static_camera_list, self.static_camera_name):
             if camera_name == "head_camera":
@@ -547,11 +553,9 @@ class Camera:
         # Merge pointcloud
         if if_combine:
             # combined_pcd = np.vstack((head_pcd , left_pcd , right_pcd, front_pcd))
-            if self.collect_wrist_camera:
-                combined_pcd = np.vstack((
-                    _get_camera_pcd(self.left_camera),
-                    _get_camera_pcd(self.right_camera),
-                ))
+            if self.collect_wrist_camera and self.wrist_cameras:
+                combined_pcd = np.vstack(tuple(_get_camera_pcd(camera)
+                                               for camera in self.wrist_cameras.values()))
             for camera, camera_name in zip(self.static_camera_list, self.static_camera_name):
                 if camera_name == "head_camera":
                     if self.collect_head_camera:

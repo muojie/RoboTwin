@@ -268,7 +268,18 @@ def main(usr_args):
     args["head_camera_h"] = _camera_config[head_camera_type]["h"]
     args["head_camera_w"] = _camera_config[head_camera_type]["w"]
 
-    if len(embodiment_type) == 1:
+    if args.get("single_arm", False):
+        if len(embodiment_type) != 1:
+            raise ValueError("single-arm embodiment expects one embodiment name")
+        active_arm = str(args.get("active_arm", "left")).lower()
+        if active_arm not in ("left", "right"):
+            raise ValueError("active_arm must be 'left' or 'right'")
+        args["left_robot_file"] = get_embodiment_file(embodiment_type[0])
+        args["right_robot_file"] = args["left_robot_file"]
+        args["active_arm"] = active_arm
+        args["dual_arm_embodied"] = False
+        args["embodiment_dis"] = 0.0
+    elif len(embodiment_type) == 1:
         args["left_robot_file"] = get_embodiment_file(embodiment_type[0])
         args["right_robot_file"] = get_embodiment_file(embodiment_type[0])
         args["dual_arm_embodied"] = True
@@ -283,7 +294,9 @@ def main(usr_args):
     args["left_embodiment_config"] = get_embodiment_config(args["left_robot_file"])
     args["right_embodiment_config"] = get_embodiment_config(args["right_robot_file"])
 
-    if len(embodiment_type) == 1:
+    if args.get("single_arm", False):
+        embodiment_name = str(embodiment_type[0]) + "-single-" + args["active_arm"]
+    elif len(embodiment_type) == 1:
         embodiment_name = str(embodiment_type[0])
     else:
         embodiment_name = str(embodiment_type[0]) + "+" + str(embodiment_type[1])
@@ -319,8 +332,18 @@ def main(usr_args):
 
     TASK_ENV = class_decorator(args["task_name"])
     args["policy_name"] = policy_name
-    usr_args["left_arm_dim"] = len(args["left_embodiment_config"]["arm_joints_name"][0])
-    usr_args["right_arm_dim"] = len(args["right_embodiment_config"]["arm_joints_name"][1])
+    if args.get("single_arm", False):
+        active_idx = 0 if args["active_arm"] == "left" else 1
+        active_dim = len(args["left_embodiment_config"]["arm_joints_name"][active_idx])
+        usr_args["left_arm_dim"] = active_dim if args["active_arm"] == "left" else 0
+        usr_args["right_arm_dim"] = active_dim if args["active_arm"] == "right" else 0
+        usr_args["active_arm_dim"] = active_dim
+        usr_args["action_dim"] = active_dim + 1
+        usr_args["active_arm"] = args["active_arm"]
+        usr_args["single_arm"] = True
+    else:
+        usr_args["left_arm_dim"] = len(args["left_embodiment_config"]["arm_joints_name"][0])
+        usr_args["right_arm_dim"] = len(args["right_embodiment_config"]["arm_joints_name"][1])
 
     seed = usr_args["seed"]
 

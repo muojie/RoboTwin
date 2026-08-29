@@ -67,6 +67,14 @@ class Base_Task(gym.Env):
         self.data_type = kwags.get("data_type", None)
         self.save_data = kwags.get("save_data", False)
         self.dual_arm = kwags.get("dual_arm", True)
+        self.single_arm = bool(kwags.get("single_arm", False))
+        self.active_arm = str(kwags.get("active_arm", "left")).lower()
+        if self.active_arm not in ("left", "right"):
+            raise ValueError("active_arm must be 'left' or 'right'")
+        if self.single_arm:
+            # A single-arm run is intentionally not a dual-arm task, even if
+            # an older task config contains the default ``dual_arm`` value.
+            self.dual_arm = False
         self.eval_mode = kwags.get("eval_mode", False)
 
         self.need_topp = True  # TODO
@@ -108,6 +116,7 @@ class Base_Task(gym.Env):
         self.record_cluttered_objects = list()  # record cluttered objects info
 
         self.eval_success = False
+        self.last_action_plan_success = True
         self.table_z_bias = (np.random.uniform(low=-self.random_table_height, high=0) + table_height_bias)  # TODO
         self.need_plan = kwags.get("need_plan", True)
         self.left_joint_path = kwags.get("left_joint_path", [])
@@ -392,12 +401,12 @@ class Base_Task(gym.Env):
         else:
             self.robot.reset(self.scene, self.need_topp, **kwags)
 
-        for link in self.robot.left_entity.get_links():
-            link: sapien.physx.PhysxArticulationLinkComponent = link
-            link.set_mass(1)
-        for link in self.robot.right_entity.get_links():
-            link: sapien.physx.PhysxArticulationLinkComponent = link
-            link.set_mass(1)
+        for entity in (self.robot.left_entity, self.robot.right_entity):
+            if entity is None:
+                continue
+            for link in entity.get_links():
+                link: sapien.physx.PhysxArticulationLinkComponent = link
+                link.set_mass(1)
 
     def load_camera(self, **kwags):
         """
@@ -429,7 +438,9 @@ class Base_Task(gym.Env):
             now_ambient_light = self.scene.ambient_light
             now_ambient_light = np.clip(np.array(now_ambient_light) + np.random.rand(3) * 0.2 - 0.1, 0, 1)
             self.scene.set_ambient_light(now_ambient_light)
-        self.cameras.update_wrist_camera(self.robot.left_camera.get_pose(), self.robot.right_camera.get_pose())
+        left_pose = self.robot.left_camera.get_pose() if self.robot.left_camera is not None else None
+        right_pose = self.robot.right_camera.get_pose() if self.robot.right_camera is not None else None
+        self.cameras.update_wrist_camera(left_pose, right_pose)
         self.scene.update_render()
 
     # =========================================================== Basic APIs ===========================================================
@@ -471,27 +482,40 @@ class Base_Task(gym.Env):
                 pkl_dic["observation"][camera_name].update(depth[camera_name])
         # endpose
         if self.data_type.get("endpose", False):
-            norm_gripper_val = [
-                self.robot.get_left_gripper_val(),
-                self.robot.get_right_gripper_val(),
-            ]
-            left_endpose = self.get_arm_pose("left")
-            right_endpose = self.get_arm_pose("right")
-            pkl_dic["endpose"]["left_endpose"] = left_endpose
-            pkl_dic["endpose"]["left_gripper"] = norm_gripper_val[0]
-            pkl_dic["endpose"]["right_endpose"] = right_endpose
-            pkl_dic["endpose"]["right_gripper"] = norm_gripper_val[1]
+            if self.single_arm:
+                arm = self.active_arm
+                pkl_dic["endpose"][f"{arm}_endpose"] = self.get_arm_pose(arm)
+                pkl_dic["endpose"][f"{arm}_gripper"] = self.robot.get_active_gripper_val()
+                pkl_dic["endpose"]["active_arm"] = arm
+            else:
+                norm_gripper_val = [
+                    self.robot.get_left_gripper_val(),
+                    self.robot.get_right_gripper_val(),
+                ]
+                left_endpose = self.get_arm_pose("left")
+                right_endpose = self.get_arm_pose("right")
+                pkl_dic["endpose"]["left_endpose"] = left_endpose
+                pkl_dic["endpose"]["left_gripper"] = norm_gripper_val[0]
+                pkl_dic["endpose"]["right_endpose"] = right_endpose
+                pkl_dic["endpose"]["right_gripper"] = norm_gripper_val[1]
         # qpos
         if self.data_type.get("qpos", False):
+            if self.single_arm:
+                jointstate = self.robot.get_active_arm_jointState()
+                arm = self.active_arm
+                pkl_dic["joint_action"][f"{arm}_arm"] = jointstate[:-1]
+                pkl_dic["joint_action"][f"{arm}_gripper"] = jointstate[-1]
+                pkl_dic["joint_action"]["active_arm"] = arm
+                pkl_dic["joint_action"]["vector"] = np.array(jointstate)
+            else:
+                left_jointstate = self.robot.get_left_arm_jointState()
+                right_jointstate = self.robot.get_right_arm_jointState()
 
-            left_jointstate = self.robot.get_left_arm_jointState()
-            right_jointstate = self.robot.get_right_arm_jointState()
-
-            pkl_dic["joint_action"]["left_arm"] = left_jointstate[:-1]
-            pkl_dic["joint_action"]["left_gripper"] = left_jointstate[-1]
-            pkl_dic["joint_action"]["right_arm"] = right_jointstate[:-1]
-            pkl_dic["joint_action"]["right_gripper"] = right_jointstate[-1]
-            pkl_dic["joint_action"]["vector"] = np.array(left_jointstate + right_jointstate)
+                pkl_dic["joint_action"]["left_arm"] = left_jointstate[:-1]
+                pkl_dic["joint_action"]["left_gripper"] = left_jointstate[-1]
+                pkl_dic["joint_action"]["right_arm"] = right_jointstate[:-1]
+                pkl_dic["joint_action"]["right_gripper"] = right_jointstate[-1]
+                pkl_dic["joint_action"]["vector"] = np.array(left_jointstate + right_jointstate)
         # pointcloud
         if self.data_type.get("pointcloud", False):
             pkl_dic["pointcloud"] = self.cameras.get_pcd(self.data_type.get("conbine", False))
@@ -530,6 +554,13 @@ class Base_Task(gym.Env):
             "left_joint_path": deepcopy(self.left_joint_path),
             "right_joint_path": deepcopy(self.right_joint_path),
         }
+        if self.single_arm:
+            active_path = self.left_joint_path if self.active_arm == "left" else self.right_joint_path
+            traj_data.update({
+                "single_arm": True,
+                "active_arm": self.active_arm,
+                "active_joint_path": deepcopy(active_path),
+            })
         save_pkl(file_path, traj_data)
 
     def load_tran_data(self, idx):
@@ -571,6 +602,11 @@ class Base_Task(gym.Env):
         self.need_plan = args.get("need_plan", True)
         self.left_joint_path = args.get("left_joint_path", [])
         self.right_joint_path = args.get("right_joint_path", [])
+        if self.single_arm and args.get("active_joint_path") is not None:
+            if self.active_arm == "left":
+                self.left_joint_path = args["active_joint_path"]
+            else:
+                self.right_joint_path = args["active_joint_path"]
 
     def _set_eval_video_ffmpeg(self, ffmpeg):
         self.eval_video_ffmpeg = ffmpeg
@@ -591,6 +627,16 @@ class Base_Task(gym.Env):
     def delay(self, delay_time, save_freq=None):
         render_freq = self.render_freq
         self.render_freq = 0
+
+        if self.single_arm:
+            active_gripper_val = self.robot.get_active_gripper_val()
+            for _ in range(delay_time):
+                if self.active_arm == "left":
+                    self.together_close_gripper(left_pos=active_gripper_val, save_freq=save_freq)
+                else:
+                    self.together_close_gripper(right_pos=active_gripper_val, save_freq=save_freq)
+            self.render_freq = render_freq
+            return
 
         left_gripper_val = self.robot.get_left_gripper_val()
         right_gripper_val = self.robot.get_right_gripper_val()
@@ -613,6 +659,28 @@ class Base_Task(gym.Env):
         alpha = 0.5
 
         left_result, right_result = None, None
+
+        if self.single_arm:
+            if set_tag == "together":
+                set_tag = self.active_arm
+            if set_tag != self.active_arm:
+                raise RuntimeError(f"{set_tag} arm is unavailable in single-arm mode")
+            target_pos = left_pos if self.active_arm == "left" else right_pos
+            if target_pos is None:
+                target_pos = 1.0
+            planner_fn = (self.robot.left_plan_grippers if self.active_arm == "left"
+                          else self.robot.right_plan_grippers)
+            current_val = self.robot.get_active_gripper_val()
+            result = planner_fn(current_val, target_pos)
+            num_step = result["num_step"]
+            result["result"] = np.pad(
+                result["result"],
+                (0, int(alpha * num_step)),
+                mode="constant",
+                constant_values=result["result"][-1],
+            )
+            result["num_step"] += int(alpha * num_step)
+            return result
 
         if set_tag == "left" or set_tag == "together":
             left_result = self.robot.left_plan_grippers(self.robot.get_left_gripper_val(), left_pos)
@@ -706,6 +774,21 @@ class Base_Task(gym.Env):
     # =========================================================== Our APIS ===========================================================
 
     def together_close_gripper(self, save_freq=-1, left_pos=0, right_pos=0):
+        if self.single_arm:
+            if self.active_arm == "left":
+                left_result = self.set_gripper(left_pos=left_pos, set_tag="left")
+                right_result = None
+            else:
+                left_result = None
+                right_result = self.set_gripper(right_pos=right_pos, set_tag="right")
+            control_seq = {
+                "left_arm": None,
+                "left_gripper": left_result,
+                "right_arm": None,
+                "right_gripper": right_result,
+            }
+            self.take_dense_action(control_seq, save_freq=save_freq)
+            return
         left_result, right_result = self.set_gripper(left_pos=left_pos, right_pos=right_pos, set_tag="together")
         control_seq = {
             "left_arm": None,
@@ -716,6 +799,21 @@ class Base_Task(gym.Env):
         self.take_dense_action(control_seq, save_freq=save_freq)
 
     def together_open_gripper(self, save_freq=-1, left_pos=1, right_pos=1):
+        if self.single_arm:
+            if self.active_arm == "left":
+                left_result = self.set_gripper(left_pos=left_pos, set_tag="left")
+                right_result = None
+            else:
+                left_result = None
+                right_result = self.set_gripper(right_pos=right_pos, set_tag="right")
+            control_seq = {
+                "left_arm": None,
+                "left_gripper": left_result,
+                "right_arm": None,
+                "right_gripper": right_result,
+            }
+            self.take_dense_action(control_seq, save_freq=save_freq)
+            return
         left_result, right_result = self.set_gripper(left_pos=left_pos, right_pos=right_pos, set_tag="together")
         control_seq = {
             "left_arm": None,
@@ -1476,13 +1574,105 @@ class Base_Task(gym.Env):
 
         return True  # TODO: maybe need try error
 
+    def _take_single_arm_action(self, action, action_type: Literal['qpos', 'ee'] = 'qpos'):
+        """Execute one 7D single-arm control step.
+
+        The single-arm contract is ``[joint1..joint6, normalized_gripper]``
+        for qpos control, or ``[x,y,z,qw,qx,qy,qz,normalized_gripper]`` for
+        end-effector control.  The legacy dual-arm path below is intentionally
+        left untouched so existing 14D policies keep their contract.
+        """
+        arm_tag = self.active_arm
+        self.last_action_plan_success = True
+        action_vec = np.asarray(action, dtype=np.float64).reshape(-1)
+        current_state = np.asarray(self.robot.get_active_arm_jointState(), dtype=np.float64)
+        arm_dim = current_state.size - 1
+
+        if action_type == "qpos":
+            expected_dim = arm_dim + 1
+            if action_vec.size != expected_dim:
+                raise ValueError(
+                    f"single-arm qpos action must have {expected_dim} values, got {action_vec.size}"
+                )
+            target_joints = action_vec[:arm_dim]
+            target_gripper = float(np.clip(action_vec[-1], 0.0, 1.0))
+            path = np.vstack((current_state[:arm_dim], target_joints))
+            mplib_planner = getattr(self.robot, f"{arm_tag}_mplib_planner", None)
+            result = None
+            topp_ok = False
+            if mplib_planner is not None:
+                try:
+                    _, position, velocity, _, _ = mplib_planner.TOPP(
+                        path, 1 / 250, verbose=True
+                    )
+                    result = {"position": np.asarray(position), "velocity": np.asarray(velocity)}
+                    topp_ok = result["position"].shape[0] > 0
+                except Exception:
+                    result = None
+            if not topp_ok:
+                # A deterministic fallback keeps a policy step well-defined
+                # when TOPP rejects a target; planning failures remain visible
+                # through the normal task status/logging.
+                n_step = 50
+                position = np.linspace(path[0], path[1], n_step)
+                velocity = np.zeros_like(position)
+                result = {"position": position, "velocity": velocity}
+                self.last_action_plan_success = False
+                print("single-arm TOPP failed; using explicit 50-step fallback", flush=True)
+        elif action_type == "ee":
+            expected_dim = 8
+            if action_vec.size != expected_dim:
+                raise ValueError(
+                    f"single-arm ee action must have {expected_dim} values, got {action_vec.size}"
+                )
+            target_pose = action_vec[:7]
+            target_gripper = float(np.clip(action_vec[-1], 0.0, 1.0))
+            plan_fn = (self.robot.left_plan_path if arm_tag == "left"
+                       else self.robot.right_plan_path)
+            result = plan_fn(target_pose)
+            if result.get("status") != "Success":
+                n_step = 50
+                position = np.repeat(
+                    np.asarray(current_state[:arm_dim], dtype=np.float64)[None, :], n_step, axis=0
+                )
+                velocity = np.zeros_like(position)
+                result = {"position": position, "velocity": velocity}
+                self.last_action_plan_success = False
+                print("single-arm EE planning failed; holding the current joint target", flush=True)
+        else:
+            raise ValueError(f"Unsupported action_type: {action_type}")
+
+        positions = np.asarray(result["position"])
+        velocities = np.asarray(result["velocity"])
+        n_step = positions.shape[0]
+        grippers = np.linspace(self.robot.get_active_gripper_val(), target_gripper, n_step)
+
+        for step_id in range(n_step):
+            self.robot.set_arm_joints(positions[step_id], velocities[step_id], arm_tag)
+            self.robot.set_gripper(grippers[step_id], arm_tag, gripper_eps=0)
+            self.scene.step()
+            self._update_render()
+            if self.render_freq and step_id % self.render_freq == 0:
+                self.viewer.render()
+            if self.check_success():
+                self.eval_success = True
+                self.get_obs()
+                return
+
+        self._update_render()
+        if self.render_freq:
+            self.viewer.render()
+
     def take_action(self, action, action_type:Literal['qpos', 'ee']='qpos'):  # action_type: qpos or ee
         if self.take_action_cnt == self.step_lim or self.eval_success:
             return
 
         eval_video_freq = 1  # fixed
         if (self.eval_video_path is not None and self.take_action_cnt % eval_video_freq == 0):
-            self.eval_video_ffmpeg.stdin.write(self.now_obs["observation"]["head_camera"]["rgb"].tobytes())
+            head_obs = self.now_obs.get("observation", {}).get("head_camera", {})
+            head_rgb = head_obs.get("rgb")
+            if head_rgb is not None and hasattr(self, "eval_video_ffmpeg"):
+                self.eval_video_ffmpeg.stdin.write(head_rgb.tobytes())
 
         self.take_action_cnt += 1
         print(f"step: \033[92m{self.take_action_cnt} / {self.step_lim}\033[0m", end="\r")
@@ -1490,6 +1680,10 @@ class Base_Task(gym.Env):
         self._update_render()
         if self.render_freq:
             self.viewer.render()
+
+        if self.single_arm:
+            self._take_single_arm_action(action, action_type=action_type)
+            return
 
         actions = np.array([action])
         left_jointstate = self.robot.get_left_arm_jointState()

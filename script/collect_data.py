@@ -58,7 +58,21 @@ def main(task_name=None, task_config=None):
             raise "missing embodiment files"
         return robot_file
 
-    if len(embodiment_type) == 1:
+    # ``single_arm`` is explicit because a one-item embodiment historically
+    # meant a native dual-arm articulation exposed through two compatibility
+    # views.  Keep that legacy meaning unless the task config opts in.
+    if args.get("single_arm", False):
+        if len(embodiment_type) != 1:
+            raise ValueError("single-arm embodiment expects one embodiment name")
+        active_arm = str(args.get("active_arm", "left")).lower()
+        if active_arm not in ("left", "right"):
+            raise ValueError("active_arm must be 'left' or 'right'")
+        args["left_robot_file"] = get_embodiment_file(embodiment_type[0])
+        args["right_robot_file"] = args["left_robot_file"]
+        args["active_arm"] = active_arm
+        args["dual_arm_embodied"] = False
+        args["embodiment_dis"] = 0.0
+    elif len(embodiment_type) == 1:
         args["left_robot_file"] = get_embodiment_file(embodiment_type[0])
         args["right_robot_file"] = get_embodiment_file(embodiment_type[0])
         args["dual_arm_embodied"] = True
@@ -73,7 +87,9 @@ def main(task_name=None, task_config=None):
     args["left_embodiment_config"] = get_embodiment_config(args["left_robot_file"])
     args["right_embodiment_config"] = get_embodiment_config(args["right_robot_file"])
 
-    if len(embodiment_type) == 1:
+    if args.get("single_arm", False):
+        embodiment_name = str(embodiment_type[0]) + "-single-" + args["active_arm"]
+    elif len(embodiment_type) == 1:
         embodiment_name = str(embodiment_type[0])
     else:
         embodiment_name = str(embodiment_type[0]) + "+" + str(embodiment_type[1])
